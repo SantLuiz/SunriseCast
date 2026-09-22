@@ -10,6 +10,7 @@ __pycache__/
 .spotify_cache
 state.json
 data/
+logs/
 
 # Distribution / packaging
 .Python
@@ -36,6 +37,14 @@ MANIFEST
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!SunriseCast.spec
+_internal/
+artifacts/
+release/
+*.zip
+*.zip.sha256
+.sunrisecast-update-*/
+.sunrisecast-previous-*/
 
 # Installer logs
 pip-log.txt

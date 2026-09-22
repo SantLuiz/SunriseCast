@@ -1,122 +1,41 @@
-from __future__ import annotations
-
-import logging
 from datetime import datetime
-from typing import Callable, Set
-
 from PySide6.QtCore import QTimer
-
-from app.repositories.settings_repository import SettingsRepository
-from app.services.sync_service import SyncService
-
-logger = logging.getLogger(__name__)
 
 
 class SchedulerService:
-    def __init__(self, sync_service: SyncService, settings_repository: SettingsRepository) -> None:
-        self.sync_service = sync_service
+    def __init__(self, controller, settings_repository):
+        self.controller = controller
         self.settings_repository = settings_repository
-
         self.timer = QTimer()
         self.timer.timeout.connect(self._tick)
+        self.executed = set()
 
-        self._executed_keys_today: Set[str] = set()
-        self._last_day: str = self._today_key()
-
-        self._success_notifier: Callable[[dict], None] | None = None
-        self._error_notifier: Callable[[str], None] | None = None
-
-    def set_notifiers(
-        self,
-        *,
-        success_notifier: Callable[[dict], None] | None = None,
-        error_notifier: Callable[[str], None] | None = None,
-    ) -> None:
-        self._success_notifier = success_notifier
-        self._error_notifier = error_notifier
-
-    def start(self) -> None:
-        self.timer.start(60_000)
+    def start(self):
+        self.controller.start()
+        self.timer.start(30_000)
         self._tick()
 
-    def stop(self) -> None:
+    def stop(self):
         self.timer.stop()
 
-    def refresh(self) -> None:
+    def refresh(self):
+        self.controller.check_pending()
         self._tick()
 
-    def _tick(self) -> None:
+    def _tick(self):
         settings = self.settings_repository.load()
-
         if not settings.auto_sync_enabled:
-            self._reset_day_if_needed()
             return
-
         now = datetime.now()
-        self._reset_day_if_needed(now)
-
-        current_time = now.strftime("%H:%M")
-        today = now.strftime("%Y-%m-%d")
-
-        valid_times = self._normalize_times(settings.sync_times)
-
-        if current_time not in valid_times:
-            return
-
-        execution_key = f"{today} {current_time}"
-        if execution_key in self._executed_keys_today:
-            return
-
-        try:
-            logger.info("Automatic synchronization triggered | execution_key=%s", execution_key)
-            result = self.sync_service.run_sync()
-            self._executed_keys_today.add(execution_key)
-
-            if self._success_notifier is not None:
-                self._success_notifier(result)
-
-        except Exception as exc:
-            logger.error("Automatic synchronization failed | execution_key=%s", execution_key, exc_info=True)
-
-            if self._error_notifier is not None:
-                self._error_notifier(str(exc))
-
-    def _normalize_times(self, times: list[str]) -> list[str]:
-        normalized: list[str] = []
-        seen: set[str] = set()
-
-        for value in times:
-            if not isinstance(value, str):
+        self.executed = {key for key in self.executed if key.startswith(now.strftime("%Y-%m-%d"))}
+        times = set()
+        for value in settings.sync_times:
+            try:
+                times.add(datetime.strptime(value.strip(), "%H:%M").strftime("%H:%M"))
+            except (ValueError, AttributeError):
                 continue
-
-            candidate = value.strip()
-            if not self._is_valid_time(candidate):
-                continue
-
-            if candidate in seen:
-                continue
-
-            seen.add(candidate)
-            normalized.append(candidate)
-
-        normalized.sort()
-        return normalized
-
-    def _is_valid_time(self, value: str) -> bool:
-        try:
-            datetime.strptime(value, "%H:%M")
-            return True
-        except ValueError:
-            return False
-
-    def _reset_day_if_needed(self, now: datetime | None = None) -> None:
-        if now is None:
-            now = datetime.now()
-
-        current_day = now.strftime("%Y-%m-%d")
-        if current_day != self._last_day:
-            self._executed_keys_today.clear()
-            self._last_day = current_day
-
-    def _today_key(self) -> str:
-        return datetime.now().strftime("%Y-%m-%d")
+        key = now.strftime("%Y-%m-%d %H:%M")
+        if now.strftime("%H:%M") in times and key not in self.executed:
+            # Record dispatch, including auth/error, to avoid repeating a failed login in the same slot.
+            self.executed.add(key)
+            self.controller.request_sync(automatic=True)

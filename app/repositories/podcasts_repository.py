@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List
 
 from app.domain.models import Podcast
+from app.repositories.atomic import atomic_json
 
 
 class PodcastsRepository:
@@ -21,7 +22,7 @@ class PodcastsRepository:
                 {"name": "Example Podcast", "show_id": "spotify_show_id_here", "priority": 1}
             ]
         }
-        self.file_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_json(self.file_path, payload)
 
     def load(self) -> List[Podcast]:
         data = json.loads(self.file_path.read_text(encoding="utf-8"))
@@ -50,4 +51,4 @@ class PodcastsRepository:
                 for podcast in sorted(podcasts, key=lambda item: item.priority)
             ]
         }
-        self.file_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_json(self.file_path, payload)

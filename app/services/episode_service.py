@@ -6,6 +6,7 @@ from typing import List
 
 from app.domain.models import Episode, Podcast
 from app.integrations.spotify_client import SpotifyGateway
+from app.services.playlist_service import playback
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +95,7 @@ class EpisodeService:
         if not isinstance(resume_point, dict):
             resume_point = {}
 
-        is_finished = bool(resume_point.get("fully_played", False))
+        is_finished, position = playback(raw)
 
         return Episode(
             id=episode_id,
@@ -104,6 +105,7 @@ class EpisodeService:
             show_name=podcast.name,
             release_date=release_date,
             is_finished=is_finished,
+            resume_position_ms=position,
         )
 
     def _parse_date(self, value: str) -> datetime | None:

@@ -1,130 +1,67 @@
-from __future__ import annotations
-
-import logging
-import traceback
-
 from PySide6.QtGui import QCloseEvent
-from PySide6.QtWidgets import (
-    QApplication,
-    QLabel,
-    QMainWindow,
-    QMessageBox,
-    QPushButton,
-    QTabWidget,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QPushButton, QTabWidget, QVBoxLayout, QWidget
 
-from app.repositories.settings_repository import SettingsRepository
-from app.services.scheduler_service import SchedulerService
-from app.services.sync_service import SyncService
+from app.ui.history_tab import HistoryTab
 from app.ui.podcasts_tab import PodcastsTab
 from app.ui.settings_tab import SettingsTab
 
-logger = logging.getLogger(__name__)
-
 
 class MainWindow(QMainWindow):
-    def __init__(
-        self,
-        sync_service: SyncService,
-        settings_repository: SettingsRepository,
-        scheduler_service: SchedulerService,
-    ) -> None:
+    def __init__(self, sync_service, settings_repository, scheduler_service, controller):
         super().__init__()
         self.sync_service = sync_service
-        self.settings_repository = settings_repository
-        self.scheduler_service = scheduler_service
+        self.controller = controller
         self.tray_controller = None
         self._allow_close = False
-
         self.setWindowTitle("SunriseCast")
-        self.resize(700, 500)
-
+        self.resize(1000, 650)
+        self.setMinimumSize(800, 500)
         central = QWidget()
-        layout = QVBoxLayout()
-
-        self.status_label = QLabel("Ready.")
-        self.sync_button = QPushButton("Synchronize now")
+        layout = QVBoxLayout(central)
+        self.status_label = QLabel("Pronto.")
+        self.status_label.setWordWrap(True)
+        self.sync_button = QPushButton("Sincronizar agora")
         self.sync_button.clicked.connect(self.run_sync)
-
-        tabs = QTabWidget()
-        tabs.addTab(
-            SettingsTab(
-                settings_repository=self.settings_repository,
-                on_settings_changed=self.scheduler_service.refresh,
-            ),
-            "Settings",
-        )
-        tabs.addTab(
-            PodcastsTab(self.sync_service.podcasts_repository),
-            "Podcasts",
-        )
-
+        self.tabs = QTabWidget()
+        self.settings_tab = SettingsTab(settings_repository, scheduler_service.refresh)
+        self.podcasts_tab = PodcastsTab(sync_service.podcasts_repository)
+        self.history_tab = HistoryTab(sync_service.state_repository, controller)
+        self.tabs.addTab(self.podcasts_tab, "Podcasts")
+        self.tabs.addTab(self.history_tab, "Histórico")
+        self.tabs.addTab(self.settings_tab, "Preferências")
         layout.addWidget(self.status_label)
         layout.addWidget(self.sync_button)
-        layout.addWidget(tabs)
-        central.setLayout(layout)
+        layout.addWidget(self.tabs)
         self.setCentralWidget(central)
+        self.controller.status_changed.connect(self.status_label.setText)
+        self.controller.available_changed.connect(self.sync_button.setEnabled)
+        self.controller.busy_changed.connect(self.set_busy)
 
-    def set_tray_controller(self, tray_controller) -> None:
+    def set_busy(self, busy):
+        # Tabs and local navigation remain usable. Only configuration writes are locked.
+        self.settings_tab.save_button.setEnabled(not busy)
+        self.podcasts_tab.set_busy(busy)
+
+    def set_tray_controller(self, tray_controller):
         self.tray_controller = tray_controller
 
-    def allow_close(self) -> None:
+    def allow_close(self):
         self._allow_close = True
 
-    def run_sync(self) -> None:
-        self.sync_button.setEnabled(False)
-        self.status_label.setText("Synchronizing...")
+    def run_sync(self):
+        self.controller.request_sync()
 
-        try:
-            result = self.sync_service.run_sync()
-            self.status_label.setText(
-                "Done. "
-                f"New: {result['new_found']} | "
-                f"Removed finished: {result['removed_finished']} | "
-                f"Final playlist: {result['final_total']}"
-            )
-            logger.info(
-                "Manual synchronization completed | new_found=%s removed_finished=%s final_total=%s",
-                result["new_found"],
-                result["removed_finished"],
-                result["final_total"],
-            )
-
-            if self.tray_controller is not None:
-                self.tray_controller.notify_sync_success(
-                    new_found=result["new_found"],
-                    removed_finished=result["removed_finished"],
-                    final_total=result["final_total"],
-                    automatic=False,
-                )
-
-        except Exception as exc:
-            traceback.print_exc()
-            self.status_label.setText("Synchronization failed.")
-            logger.error("Synchronization failed", exc_info=True)
-
-            if self.tray_controller is not None:
-                self.tray_controller.notify_sync_error(
-                    str(exc),
-                    automatic=False,
-                )
-
-            QMessageBox.critical(self, "SunriseCast error", str(exc))
-        finally:
-            self.sync_button.setEnabled(True)
-
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def closeEvent(self, event: QCloseEvent):
         if self._allow_close:
             event.accept()
-            return
-
-        if self.tray_controller is not None:
+        elif self.tray_controller is not None:
             self.tray_controller.handle_close_event(event)
-            return
+        elif self.controller.busy:
+            event.ignore()
+            self.controller.ready_to_quit.connect(QApplication.instance().quit)
+            self.controller.shutdown()
+        else:
+            event.accept()
 
-        event.accept()
-
-    def exec_app(self) -> None:
+    def exec_app(self):
         QApplication.instance().exec()

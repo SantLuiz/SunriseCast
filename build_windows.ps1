@@ -1,66 +1,31 @@
 param(
-    [switch]$Clean = $true
+    [string]$Python = "",
+    [string]$OutputRoot = "",
+    [switch]$SkipTests
 )
-
 $ErrorActionPreference = "Stop"
-
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-Set-Location $ProjectRoot
-
-Write-Host "== SunriseCast Windows Build ==" -ForegroundColor Cyan
-Write-Host "Project root: $ProjectRoot"
-
-# Optional: activate venv if it exists
-$venvActivate = Join-Path $ProjectRoot "venv\Scripts\Activate.ps1"
-if (Test-Path $venvActivate) {
-    Write-Host "Activating virtual environment..." -ForegroundColor Yellow
-    . $venvActivate
-} else {
-    Write-Host "Virtual environment activation script not found. Continuing with current Python..." -ForegroundColor Yellow
+Set-Location -LiteralPath $ProjectRoot
+if (-not $Python) { $Python = Join-Path $ProjectRoot ".venv\Scripts\python.exe" }
+if (-not $OutputRoot) { $OutputRoot = Join-Path $ProjectRoot "release\2.0.0" }
+$OutputRoot = [IO.Path]::GetFullPath($OutputRoot)
+if (-not (Test-Path -LiteralPath $Python)) { throw "Crie .venv com Python 3.12 e instale requirements-lock.txt usando uv pip install." }
+& $Python -c "import sys; assert sys.version_info[:2] == (3, 12), 'Use Python 3.12'"
+if ($LASTEXITCODE -ne 0) { throw "Python incompatível." }
+if (-not $SkipTests) {
+    & $Python -m pytest -q
+    if ($LASTEXITCODE -ne 0) { throw "Testes falharam." }
 }
-
-# Validate required files
-$runFile = Join-Path $ProjectRoot "run.py"
-$specFile = Join-Path $ProjectRoot "SunriseCast.spec"
-
-if (-not (Test-Path $runFile)) {
-    throw "run.py not found at project root."
+& $Python -m PyInstaller --clean --noconfirm --distpath $OutputRoot --workpath (Join-Path $ProjectRoot "build\v2") SunriseCast.spec
+if ($LASTEXITCODE -ne 0) { throw "PyInstaller falhou." }
+$Bundle = Join-Path $OutputRoot "SunriseCast"
+$Executable = Join-Path $Bundle "SunriseCast.exe"
+if (-not (Test-Path -LiteralPath $Executable)) { throw "Executável ausente." }
+$Forbidden = Get-ChildItem -LiteralPath $Bundle -Force -Recurse | Where-Object {
+    $_.Name -in @(".env", ".spotify_cache", "podcasts.json", "settings.json", "state.json", "app.log")
 }
-
-if (-not (Test-Path $specFile)) {
-    throw "SunriseCast.spec not found at project root."
-}
-
-# Clean previous outputs
-if ($Clean) {
-    Write-Host "Cleaning previous build output..." -ForegroundColor Yellow
-
-    $buildDir = Join-Path $ProjectRoot "build"
-    $distDir = Join-Path $ProjectRoot "dist"
-
-    if (Test-Path $buildDir) { Remove-Item $buildDir -Recurse -Force }
-    if (Test-Path $distDir) { Remove-Item $distDir -Recurse -Force }
-}
-
-Write-Host "Checking PyInstaller..." -ForegroundColor Yellow
-python -m PyInstaller --version
-
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller is not available in the current environment."
-}
-
-Write-Host "Running PyInstaller with spec file..." -ForegroundColor Yellow
-python -m PyInstaller --noconfirm SunriseCast.spec
-
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller failed with exit code $LASTEXITCODE"
-}
-
-$exePath = Join-Path $ProjectRoot "dist\SunriseCast\SunriseCast.exe"
-if (Test-Path $exePath) {
-    Write-Host ""
-    Write-Host "Build completed successfully." -ForegroundColor Green
-    Write-Host "Executable: $exePath" -ForegroundColor Green
-} else {
-    throw "Build finished, but SunriseCast.exe was not found."
-}
+if ($Forbidden) { throw "O pacote contém arquivos pessoais." }
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "update_installation.ps1") -Destination $OutputRoot
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "UPDATE_GUIDE.md") -Destination $OutputRoot
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "requirements-lock.txt") -Destination $OutputRoot
+Write-Host "Build concluído: $Executable"

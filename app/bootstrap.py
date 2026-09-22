@@ -10,11 +10,9 @@ from app.services.episode_service import EpisodeService
 from app.services.playlist_service import PlaylistService
 from app.services.scheduler_service import SchedulerService
 from app.services.sync_service import SyncService
+from app.services.operation_controller import OperationController
 from app.ui.main_window import MainWindow
 from app.utils.paths import resource_path
-
-setup_logging()
-
 
 class Application:
     def __init__(
@@ -43,7 +41,7 @@ def build_application() -> Application:
     spotify_gateway = SpotifyGateway(raw_spotify_client)
 
     podcasts_repository = PodcastsRepository(config.podcasts_file)
-    state_repository = StateRepository(config.state_file)
+    state_repository = StateRepository(config.state_file, playlist_id=config.playlist_id)
     settings_repository = SettingsRepository(config.settings_file)
 
     episode_service = EpisodeService(spotify_gateway)
@@ -58,8 +56,9 @@ def build_application() -> Application:
         playlist_service=playlist_service,
     )
 
+    controller = OperationController(sync_service)
     scheduler = SchedulerService(
-        sync_service=sync_service,
+        controller=controller,
         settings_repository=settings_repository,
     )
 
@@ -67,6 +66,7 @@ def build_application() -> Application:
         sync_service=sync_service,
         settings_repository=settings_repository,
         scheduler_service=scheduler,
+        controller=controller,
     )
 
     tray = SunriseCastTray(
@@ -75,18 +75,8 @@ def build_application() -> Application:
         icon_path=str(resource_path("assets", "icon.ico")),
     )
 
-    scheduler.set_notifiers(
-        success_notifier=lambda result: tray.notify_sync_success(
-            new_found=result["new_found"],
-            removed_finished=result["removed_finished"],
-            final_total=result["final_total"],
-            automatic=True,
-        ),
-        error_notifier=lambda error_message: tray.notify_sync_error(
-            error_message,
-            automatic=True,
-        ),
-    )
+    controller.completed.connect(tray.notify_outcome)
+    controller.available_changed.connect(tray.sync_action.setEnabled)
 
     window.set_tray_controller(tray)
 

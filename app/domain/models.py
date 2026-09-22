@@ -19,7 +19,9 @@ class Episode:
     show_id: str
     show_name: str
     release_date: str
-    is_finished: bool = False
+    is_finished: bool | None = None
+    resume_position_ms: int | None = None
+    added_at: str | None = None
 
 
 @dataclass(slots=True)

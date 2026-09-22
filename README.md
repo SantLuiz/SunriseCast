@@ -1,5 +1,7 @@
 # SunriseCast
 
+> **Atualização 2.0.0 (21/09/2026):** sincronização em worker, espera do Spotify persistida, limpeza por 14 dias sem avanço e Histórico com restauração múltipla. Consulte [o contexto atualizado](PROJECT_CONTEXT.md), [o guia de atualização e reversão](UPDATE_GUIDE.md) e [a validação](VALIDATION.md). O [overhaul visual](UI_OVERHAUL_PLAN.md) permanece separado. As instruções antigas abaixo descrevem a versão inicial; para esta entrega, use Python 3.12 em `.venv`, `requirements-lock.txt` e `build_windows.ps1` (saída em `release/2.0.0`).
+
 <p align="right">
   <img src="https://img.shields.io/badge/Python-3.10+-blue" />
   <img src="https://img.shields.io/badge/Spotify-API-1DB954" />

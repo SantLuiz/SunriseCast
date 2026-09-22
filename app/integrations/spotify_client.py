@@ -1,152 +1,82 @@
-from __future__ import annotations
-
-import logging
-from typing import Any, List
-
+from typing import Any
 import spotipy
 from spotipy.exceptions import SpotifyException
 
 from app.config.constants import EPISODE_FETCH_LIMIT, SPOTIFY_MARKET
-
-logger = logging.getLogger(__name__)
+from app.integrations.errors import AuthenticationRequired, OperationCancelled, SpotifyRateLimited
 
 
 class SpotifyGateway:
-    def __init__(self, client: spotipy.Spotify) -> None:
+    def __init__(self, client: spotipy.Spotify):
         self.client = client
+        self.cancelled = lambda: False
+        self.cache = {}
 
-    def get_show_episodes(
-        self,
-        show_id: str,
-        limit: int = EPISODE_FETCH_LIMIT,
-        offset: int = 0,
-    ) -> List[dict[str, Any]]:
-        response = self.client.show_episodes(
-            show_id,
-            limit=limit,
-            offset=offset,
-            market=SPOTIFY_MARKET,
-        )
-        items = response.get("items", [])
-        return items if isinstance(items, list) else []
+    def begin_operation(self, interactive=False, cancelled=None):
+        self.cache = {}
+        self.cancelled = cancelled or (lambda: False)
+        auth = self.client.auth_manager
+        if auth is not None:
+            auth.interactive = interactive
+            auth.cancelled = self.cancelled
 
-    def get_playlist_items(
-        self,
-        playlist_id: str,
-        limit: int = 100,
-        offset: int = 0,
-    ) -> List[dict[str, Any]]:
-        logger.info(
-            "Fetching playlist items | playlist_id=%s offset=%s limit=%s",
-            playlist_id,
-            offset,
-            limit,
-        )
+    def check_cancelled(self):
+        if self.cancelled():
+            raise OperationCancelled("Operação interrompida. Alterações pendentes serão conferidas na próxima execução.")
 
-        response = self.client.playlist_items(
-            playlist_id,
-            limit=limit,
-            offset=offset,
-            additional_types=("episode",),
-        )
-
-        items = response.get("items", [])
-        if not isinstance(items, list):
-            logger.warning("Playlist items response is invalid | playlist_id=%s", playlist_id)
-            return []
-
-        logger.debug("Fetched %s playlist item(s) | playlist_id=%s", len(items), playlist_id)
-        return items
-
-    def get_episode(self, episode_id: str) -> dict[str, Any] | None:
+    def _call(self, method, *args, **kwargs):
+        self.check_cancelled()
         try:
-            response = self.client.episode(
-                episode_id,
-                market=SPOTIFY_MARKET,
-            )
-            return response if isinstance(response, dict) else None
+            return method(*args, **kwargs)
         except SpotifyException as exc:
-            if exc.http_status == 403:
-                logger.warning("Episode forbidden (403), skipping | episode_id=%s", episode_id)
-                return None
-
-            logger.error("Failed to fetch episode | episode_id=%s", episode_id, exc_info=True)
+            if exc.http_status == 429:
+                headers = {k.lower(): v for k, v in (exc.headers or {}).items()}
+                raise SpotifyRateLimited(headers.get("retry-after"), exc.reason) from exc
+            if exc.http_status == 401:
+                auth = self.client.auth_manager
+                if auth is not None:
+                    # Invalidate a revoked but not yet expired token. The next manual run
+                    # can refresh/authorize; automatic runs still cannot open a browser.
+                    cached = auth.cache_handler.get_cached_token()
+                    if cached:
+                        cached["expires_at"] = 0
+                        auth.cache_handler.save_token_to_cache(cached)
+                raise AuthenticationRequired("Autorização do Spotify expirada. Sincronize manualmente para entrar novamente.") from exc
             raise
 
-    def get_episode_resume_points(self, episode_ids: list[str]) -> dict[str, bool]:
-        result: dict[str, bool] = {}
+    def get_show_episodes(self, show_id, limit=EPISODE_FETCH_LIMIT, offset=0):
+        response = self._call(self.client.show_episodes, show_id, limit=limit,
+                              offset=offset, market=SPOTIFY_MARKET)
+        return self._items(response)
 
-        for episode_id in episode_ids:
-            raw_episode = self.get_episode(episode_id)
-            if not raw_episode:
-                continue
+    def get_playlist_items(self, playlist_id, limit=50, offset=0):
+        response = self._call(self.client.playlist_items, playlist_id, limit=limit,
+                              offset=offset, market=SPOTIFY_MARKET, additional_types=("episode",))
+        return self._items(response)
 
-            resume_point = raw_episode.get("resume_point", {})
-            if not isinstance(resume_point, dict):
-                resume_point = {}
+    @staticmethod
+    def _items(response):
+        if not isinstance(response, dict) or not isinstance(response.get("items"), list):
+            raise RuntimeError("Resposta inválida do Spotify; operação interrompida para preservar a playlist.")
+        return response["items"]
 
-            fully_played = bool(resume_point.get("fully_played", False))
-            result[episode_id] = fully_played
+    def get_episode(self, episode_id):
+        if episode_id not in self.cache:
+            try:
+                self.cache[episode_id] = self._call(self.client.episode, episode_id, market=SPOTIFY_MARKET)
+            except SpotifyException as exc:
+                if exc.http_status not in (403, 404):
+                    raise
+                self.cache[episode_id] = None
+        return self.cache[episode_id]
 
-            logger.debug(
-                "Resume point fetched | episode_id=%s fully_played=%s",
-                episode_id,
-                fully_played,
-            )
+    # Exactly one remote mutation per method. The service journals and confirms each batch.
+    def add_items_to_playlist(self, playlist_id, uris):
+        return self._call(self.client.playlist_add_items, playlist_id, uris)
 
-        return result
+    def remove_all_occurrences_from_playlist(self, playlist_id, uris):
+        return self._call(self.client.playlist_remove_all_occurrences_of_items, playlist_id, uris)
 
-    def add_items_to_playlist(self, playlist_id: str, uris: list[str]) -> None:
-        if not uris:
-            return
-
-        chunk_size = 100
-        for start in range(0, len(uris), chunk_size):
-            chunk = uris[start:start + chunk_size]
-            self.client.playlist_add_items(playlist_id, chunk)
-
-        logger.info("Added %s item(s) to playlist | playlist_id=%s", len(uris), playlist_id)
-
-    def replace_playlist_items(self, playlist_id: str, uris: list[str]) -> None:
-        if uris:
-            first_chunk = uris[:100]
-            self.client.playlist_replace_items(playlist_id, first_chunk)
-
-            remaining = uris[100:]
-            if remaining:
-                self.add_items_to_playlist(playlist_id, remaining)
-
-            logger.info(
-                "Replaced playlist contents | playlist_id=%s final_count=%s",
-                playlist_id,
-                len(uris),
-            )
-            return
-
-        current_items = self.get_playlist_items(playlist_id)
-        current_uris: list[str] = []
-
-        for item in current_items:
-            track = item.get("track") or item.get("item")
-            if not isinstance(track, dict):
-                continue
-
-            uri = track.get("uri")
-            if isinstance(uri, str) and uri:
-                current_uris.append(uri)
-
-        if current_uris:
-            self.remove_all_occurrences_from_playlist(playlist_id, current_uris)
-
-        logger.info("Cleared playlist contents | playlist_id=%s", playlist_id)
-
-    def remove_all_occurrences_from_playlist(self, playlist_id: str, uris: list[str]) -> None:
-        if not uris:
-            return
-
-        chunk_size = 100
-        for start in range(0, len(uris), chunk_size):
-            chunk = uris[start:start + chunk_size]
-            self.client.playlist_remove_all_occurrences_of_items(playlist_id, chunk)
-
-        logger.info("Removed %s item(s) from playlist | playlist_id=%s", len(uris), playlist_id)
+    def reorder_items(self, playlist_id, range_start, insert_before, range_length=1):
+        return self._call(self.client.playlist_reorder_items, playlist_id,
+                          range_start, insert_before, range_length=range_length)

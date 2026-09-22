@@ -21,6 +21,7 @@ class PodcastsTab(QWidget):
         super().__init__()
         self.podcasts_repository = podcasts_repository
         self.editing_index: int | None = None
+        self.busy = False
 
         self.list_widget = QListWidget()
         self.list_widget.currentRowChanged.connect(self._load_selected_into_form)
@@ -232,6 +233,9 @@ class PodcastsTab(QWidget):
         self._update_edit_mode(False)
 
     def _load_selected_into_form(self, current_row: int) -> None:
+        if self.editing_index is not None and current_row != self.editing_index:
+            self.editing_index = None
+            self._update_edit_mode(False)
         podcasts = self._load_podcasts()
 
         if current_row < 0 or current_row >= len(podcasts):
@@ -253,10 +257,16 @@ class PodcastsTab(QWidget):
         self.priority_input.setValue(len(self._load_podcasts()) + 1)
 
     def _update_edit_mode(self, editing: bool) -> None:
-        self.add_button.setEnabled(not editing)
-        self.edit_button.setEnabled(not editing)
-        self.save_edit_button.setEnabled(editing)
+        self.add_button.setEnabled(not editing and not self.busy)
+        self.edit_button.setEnabled(not editing and not self.busy)
+        self.save_edit_button.setEnabled(editing and not self.busy)
         self.cancel_edit_button.setEnabled(editing)
+
+    def set_busy(self, busy: bool) -> None:
+        self.busy = busy
+        for button in (self.remove_button, self.move_up_button, self.move_down_button):
+            button.setEnabled(not busy)
+        self._update_edit_mode(self.editing_index is not None)
 
     def _reassign_priorities(self, podcasts: list[Podcast]) -> list[Podcast]:
         normalized: list[Podcast] = []

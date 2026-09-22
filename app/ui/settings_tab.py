@@ -79,6 +79,7 @@ class SettingsTab(QWidget):
             candidate = value.strip()
             if not self._is_valid_time(candidate):
                 continue
+            candidate = datetime.strptime(candidate, "%H:%M").strftime("%H:%M")
 
             if candidate in seen:
                 continue

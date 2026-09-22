@@ -32,16 +32,16 @@ class SunriseCastTray:
 
         menu = QMenu()
 
-        self.open_action = QAction("Open SunriseCast", self.window)
+        self.open_action = QAction("Abrir SunriseCast", self.window)
         self.open_action.triggered.connect(self.show_window)
 
-        self.sync_action = QAction("Synchronize now", self.window)
+        self.sync_action = QAction("Sincronizar agora", self.window)
         self.sync_action.triggered.connect(self.run_sync)
 
-        self.hide_action = QAction("Hide window", self.window)
+        self.hide_action = QAction("Ocultar janela", self.window)
         self.hide_action.triggered.connect(self.hide_window)
 
-        self.quit_action = QAction("Exit", self.window)
+        self.quit_action = QAction("Sair", self.window)
         self.quit_action.triggered.connect(self.quit_application)
 
         menu.addAction(self.open_action)
@@ -106,10 +106,19 @@ class SunriseCastTray:
         logger.info("Application exit requested from tray")
         self._force_quit = True
         self.scheduler_service.stop()
+        self.quit_action.setEnabled(False)
+        self.window.controller.ready_to_quit.connect(self._finish_quit)
+        self.window.controller.shutdown()
+
+    def _finish_quit(self) -> None:
         self.tray_icon.hide()
         self.window.allow_close()
         self.window.close()
         QApplication.instance().quit()
+
+    def notify_outcome(self, outcome) -> None:
+        level = QSystemTrayIcon.Information if outcome["status"] in ("success", "waiting") else QSystemTrayIcon.Warning
+        self.tray_icon.showMessage("SunriseCast", self.window.controller.last_status, level, 7000)
 
     def handle_close_event(self, event: QCloseEvent) -> None:
         if self._force_quit:
@@ -119,7 +128,7 @@ class SunriseCastTray:
         self.window.hide()
         self.tray_icon.showMessage(
             "SunriseCast",
-            "SunriseCast is still running in the system tray.",
+            "O SunriseCast continua em execução na bandeja.",
             QSystemTrayIcon.Information,
             3000,
         )

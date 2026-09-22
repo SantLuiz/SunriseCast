@@ -20,7 +20,7 @@ class AppConfig:
 
     @classmethod
     def load(cls) -> "AppConfig":
-        load_dotenv()
+        load_dotenv(Path.cwd() / ".env")
 
         data_dir = Path("data")
         data_dir.mkdir(exist_ok=True)

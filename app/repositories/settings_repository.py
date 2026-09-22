@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.config.constants import DEFAULT_INTERVAL_DAYS, DEFAULT_SYNC_ENABLED, DEFAULT_SYNC_TIMES
 from app.domain.models import SyncSettings
+from app.repositories.atomic import atomic_json
 
 
 class SettingsRepository:
@@ -39,4 +40,4 @@ class SettingsRepository:
             "interval_days": settings.interval_days,
             "sync_times": settings.sync_times,
         }
-        self.file_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        atomic_json(self.file_path, payload)
